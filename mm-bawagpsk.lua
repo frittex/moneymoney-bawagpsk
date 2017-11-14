@@ -5,17 +5,24 @@ WebBanking{
     description = "Bawag PSK Web-Scraping"
 }
 
+local connection
+
 function SupportsBank (protocol, bankCode)
     return protocol == ProtocolWebBanking and bankCode == "Bawag PSK"
 end
 
 function InitializeSession (protocol, bankCode, username, username2, password, username3)
-    print(protocol)
-    print(bankCode)
-    print(username)
-    print(username2)
-    print(password)
-    print(username3)
+    connection = Connection()
+
+    local loginPage = HTML(connection:get(url))
+
+    loginPage:xpath("//input[@name='dn']"):attr("value", username)
+    loginPage:xpath("//input[@name='pin']"):attr("value", password)
+
+    local loginForm = loginPage:xpath("//form[@name='loginForm']")
+    local loginResponsePage = HTML(connection:request(loginForm:submit()))
+
+    MM.printStatus("Login successful");
 end
 
 function ListAccounts (knownAccounts)
