@@ -36,16 +36,26 @@ function InitializeSession (protocol, bankCode, username, username2, password, u
 end
 
 function ListAccounts (knownAccounts)
-  -- Return array of accounts.
-  local account = {
-    name = "Premium Account",
-    owner = "Jane Doe",
-    accountNumber = "111222333444",
-    bankCode = "80007777",
-    currency = "EUR",
-    type = AccountTypeGiro
-  }
-  return {account}
+    local navigationForm = overviewPage:xpath("//form[@name='navigationform']")
+    navigationForm:xpath("//input[@name='d']"):attr("value", "accountdetails")
+    local accountDetailsPage = HTML(connection:request(navigationForm:submit()))
+
+    local accountName = accountDetailsPage:xpath("//label[text()='Produktbezeichnung']/following::label[1]"):text()
+    local accountIBAN = accountDetailsPage:xpath("//label[text()='IBAN']/following::label[1]"):text()
+    local accountBIC = accountDetailsPage:xpath("//label[text()='BIC']/following::label[1]"):text()
+    local accountOwner = accountDetailsPage:xpath("//label[text()='Name']/following::label[1]"):text()
+
+    -- Return array of accounts.
+    local account = {
+        name = accountName,
+        accountNumber = accountIBAN,
+        bic = accountBIC,
+        owner = accountOwner,
+        iban = accountIBAN,
+        currency = "EUR",
+        type = AccountTypeGiro
+    }
+    return {account}
 end
 
 function RefreshAccount (account, since)
