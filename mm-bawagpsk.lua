@@ -6,6 +6,7 @@ WebBanking{
 }
 
 local connection
+local overviewPage
 
 function SupportsBank (protocol, bankCode)
     return protocol == ProtocolWebBanking and bankCode == "Bawag PSK"
@@ -21,6 +22,15 @@ function InitializeSession (protocol, bankCode, username, username2, password, u
 
     local loginForm = loginPage:xpath("//form[@name='loginForm']")
     local loginResponsePage = HTML(connection:request(loginForm:submit()))
+
+    local erorrMessage = loginResponsePage:xpath("//*[@id='error_part_text']"):text()
+    if string.len(erorrMessage) > 0 then
+        MM.printStatus("Login failed. Reason: " .. erorrMessage)
+        -- return LoginFailed
+        return "Error received from BAWAG eBanking: " .. erorrMessage
+    end
+
+    overviewPage = loginResponsePage
 
     MM.printStatus("Login successful");
 end
@@ -49,5 +59,7 @@ function RefreshAccount (account, since)
 end
 
 function EndSession ()
-  -- Logout.
+    local navigationForm = overviewPage:xpath("//form[@name='navigationform']")
+    navigationForm:xpath("//input[@name='d']"):attr("value", "logoutredirect")
+    local transactionsPage = HTML(connection:request(navigationForm:submit()))
 end
