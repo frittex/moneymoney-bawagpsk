@@ -1,3 +1,27 @@
+-- The MIT License (MIT)
+--
+-- Copyright (c) 2012-2016 MRH applications GmbH
+-- Copyright (c) Gregor Harlan
+-- Copyright (c) 2017 Frittex
+--
+-- Permission is hereby granted, free of charge, to any person obtaining a copy
+-- of this software and associated documentation files (the "Software"), to deal
+-- in the Software without restriction, including without limitation the rights
+-- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+-- copies of the Software, and to permit persons to whom the Software is
+-- furnished to do so, subject to the following conditions:
+--
+-- The above copyright notice and this permission notice shall be included in
+-- all copies or substantial portions of the Software.
+--
+-- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+-- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+-- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+-- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+-- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+-- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+-- THE SOFTWARE.
+
 WebBanking{
     version = 0.1,
     url         = "https://ebanking.bawagpsk.com/InternetBanking/InternetBanking?d=login",
@@ -94,6 +118,7 @@ local function parseTransaction(transactionText, transaction)
     local transactionCodePattern = "((%a%a)/%d%d%d%d%d%d%d%d%d)"
     local i, j, transactionCode, shortCode = transactionText:find(transactionCodePattern)
 
+    -- helper function to extract BIC & IBAN from transactions that contain it
     local function extractBICIBAN(onlyIBAN)
         local pattern = "^(%w+)"
         local title = transactionText:sub(j+2)
@@ -108,6 +133,10 @@ local function parseTransaction(transactionText, transaction)
         transaction.name = title:sub(n+2)
     end
 
+    -- BAWAG PSK uses two-letter codes to denote the type of transaction.
+    -- The format of the transaction details is very inconsistent among the transaction types.
+    -- This lookup table is therefore used to extract the particular details from every transaction type.
+    -- It can be extended, should new transaction codes appear in the future and uses a default for yet unknown types.
     local codeTable = {
         MC = function()
             local timePattern = "(%d%d:%d%d)"
@@ -146,6 +175,17 @@ local function parseTransaction(transactionText, transaction)
         end
     }
 
+    -- set default for yet unknown two-letter transaction codes
+    local mt = {
+        __index = function (t, k)
+            return function ()
+                transaction.bookingText = "Unbekannt: " .. k
+                transaction.name= transactionText
+            end
+        end
+    }
+    setmetatable(codeTable, mt)
+
     codeTable[shortCode]()
     return transaction
 end
@@ -154,8 +194,10 @@ end
 -- Scraping
 -------------------------------------------------------------------------------
 
+-- global variables to re-use a single connection and cache the entry page of the web banking portal
 local connection
 local overviewPage
+
 
 function SupportsBank (protocol, bankCode)
     return protocol == ProtocolWebBanking and bankCode == "Bawag PSK"
@@ -175,7 +217,6 @@ function InitializeSession (protocol, bankCode, username, username2, password, u
     local erorrMessage = loginResponsePage:xpath("//*[@id='error_part_text']"):text()
     if string.len(erorrMessage) > 0 then
         MM.printStatus("Login failed. Reason: " .. erorrMessage)
-        -- return LoginFailed
         return "Error received from BAWAG eBanking: " .. erorrMessage
     end
 
@@ -194,7 +235,6 @@ function ListAccounts (knownAccounts)
     local accountBIC = accountDetailsPage:xpath("//label[text()='BIC']/following::label[1]"):text()
     local accountOwner = accountDetailsPage:xpath("//label[text()='Name']/following::label[1]"):text()
 
-    -- Return array of accounts.
     local account = {
         name = accountName,
         accountNumber = accountIBAN,
@@ -215,6 +255,7 @@ function RefreshAccount (account, since)
     local balance = transactionsPage:xpath("//span[@class='konto-stand-sum']/span[1]"):text()
     balance = strToAmount(balance)
 
+    -- initiate download of CSV file of all transactions
     local transactionSearchForm = transactionsPage:xpath("//form[@name='transactionSearchForm']")
     transactionSearchForm:xpath("//input[@name='csv']"):attr("value", "true")
     transactionSearchForm:xpath("//input[@name='submitflag']"):attr("value", "true")
@@ -223,6 +264,7 @@ function RefreshAccount (account, since)
     local content, charset, mimeType, filename, headers = connection:request(transactionSearchForm:submit())
     local transactionsCSV = MM.fromEncoding(charset, content)
 
+    -- parse CSV file using an inline callback function to populate the transaction fields
     local transactions = {}
     parseCSV(transactionsCSV, function (fields)
         if #fields < 6 then
