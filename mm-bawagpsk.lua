@@ -23,7 +23,7 @@
 -- THE SOFTWARE.
 
 WebBanking{
-    version = 0.1,
+    version = 1.00,
     url         = "https://ebanking.bawagpsk.com/InternetBanking/InternetBanking?d=login",
     services    = {"Bawag PSK"},
     description = "Bawag PSK Web-Scraping"
