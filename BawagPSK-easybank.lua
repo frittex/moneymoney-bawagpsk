@@ -24,9 +24,8 @@
 
 WebBanking{
     version = 1.00,
-    url         = "https://ebanking.easybank.at/InternetBanking/InternetBanking?d=login",
-    services    = {"easybank"},
-    description = "easybank Web-Scraping"
+    services    = {"Bawag PSK", "easybank"},
+    description = "Bawag PSK / easybank Web-Scraping"
 }
 
 -------------------------------------------------------------------------------
@@ -38,7 +37,10 @@ local debug = false -- if true account and transaction details are printed
 -- Member variables
 -------------------------------------------------------------------------------
 local ignoreSince = false -- ListAccounts sets this to true in order to get
-                          -- all transaction in the past 
+                          -- all transaction in the past
+
+local urlEasybank = "https://ebanking.easybank.at/InternetBanking/InternetBanking?d=login"
+local urlBawag = "https://ebanking.bawagpsk.com/InternetBanking/InternetBanking?d=login"
 
 -------------------------------------------------------------------------------
 -- Helper functions
@@ -249,13 +251,13 @@ local overviewPage
 
 
 function SupportsBank (protocol, bankCode)
-    return protocol == ProtocolWebBanking and bankCode == "easybank"
+    return protocol == ProtocolWebBanking and (bankCode == "easybank" or bankCode == "Bawag PSK")
 end
 
 function InitializeSession (protocol, bankCode, username, username2, password, username3)
     connection = Connection()
 
-    local loginPage = HTML(connection:get(url))
+    local loginPage = HTML(bankCode == "Bawag PSK" and connection:get(urlBawag) or connection:get(urlEasybank))
 
     loginPage:xpath("//input[@name='dn']"):attr("value", username)
     loginPage:xpath("//input[@name='pin']"):attr("value", password)
@@ -266,7 +268,7 @@ function InitializeSession (protocol, bankCode, username, username2, password, u
     local erorrMessage = loginResponsePage:xpath("//*[@id='error_part_text']"):text()
     if string.len(erorrMessage) > 0 then
         MM.printStatus("Login failed. Reason: " .. erorrMessage)
-        return "Error received from easybank eBanking: " .. erorrMessage
+        return "Error received from eBanking: " .. erorrMessage
     end
 
     overviewPage = loginResponsePage
