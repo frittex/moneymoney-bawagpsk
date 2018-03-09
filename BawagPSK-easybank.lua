@@ -140,19 +140,22 @@ end
 -- function to parse transaction details from CSV fields
 local function parseTransaction(transactionText, transaction)
     local transactionCodePattern = "((%u%u)/%d%d%d%d%d%d%d%d%d)"
+    -- local ibanPattern = "%u%u%d%d%w%w%w%w%w%w%w%w%w%w%w%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?"
+
     local i, j, transactionCode, shortCode = transactionText:find(transactionCodePattern)
 
-    local function hasIBAN()
-        local pattern = "%u%u%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d"
-        return transactionText:sub(j+2):match(pattern) ~= nil
-    end
+    -- local function hasIBAN()
+    --     return transactionText:sub(j+2):match(ibanPattern) ~= nil
+    -- end
 
     -- helper function to extract BIC & IBAN from transactions that contain it
     local function extractBICIBAN(onlyIBAN)
-        if hasIBAN() then
-            local pattern = "^(%w+)"
-            local title = transactionText:sub(j+2)
-            local m, n, match = title:find(pattern)
+        -- if hasIBAN() then
+        local pattern = "^([%wäüö]+)"
+        local title = transactionText:sub(j+2)
+        local m, n, match = title:find(pattern)
+        
+        if m ~= nil then
             if onlyIBAN then
                 transaction.accountNumber = match
             else
@@ -160,8 +163,16 @@ local function parseTransaction(transactionText, transaction)
                 m, n, match = title:find(pattern, n+2)
                 transaction.accountNumber = match
             end
-            transaction.name = title:sub(n+2)
+
+            if n ~= nil then
+                transaction.name = title:sub(n+2)
+            else
+                transaction.name = title
+            end
+        else
+            transaction.name = title
         end
+        -- end
     end
 
     -- BAWAG PSK / easybank uses two-letter codes to denote the type of transaction.
