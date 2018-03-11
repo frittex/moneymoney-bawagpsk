@@ -24,20 +24,44 @@
 
 WebBanking{
     version = 1.00,
-    url         = "https://ebanking.bawagpsk.com/InternetBanking/InternetBanking?d=login",
-    services    = {"Bawag PSK"},
-    description = "Bawag PSK Web-Scraping"
+    services    = {"Bawag PSK", "easybank"},
+    description = "Bawag PSK / easybank Web-Scraping"
 }
+
+-------------------------------------------------------------------------------
+-- Config
+-------------------------------------------------------------------------------
+local debug = false -- if true account and transaction details are printed
+
+-------------------------------------------------------------------------------
+-- Member variables
+-------------------------------------------------------------------------------
+local ignoreSince = false -- ListAccounts sets this to true in order to get
+                          -- all transaction in the past
+
+local urlEasybank = "https://ebanking.easybank.at/InternetBanking/InternetBanking?d=login"
+local urlBawag = "https://ebanking.bawagpsk.com/InternetBanking/InternetBanking?d=login"
 
 -------------------------------------------------------------------------------
 -- Helper functions
 -------------------------------------------------------------------------------
+
+-- https://stackoverflow.com/questions/20459943/find-the-last-index-of-a-character-in-a-string
+function findLast(haystack, needle)
+    local i=haystack:match(".*"..needle.."()")
+    if i==nil then return nil else return i-1 end
+end
+
 -- A few of these functions were taken and adapted from
 -- https://github.com/jgoldhammer/moneymoney-payback
 
 -- remove leading/trailing whitespace from string
 local function trim(s)
     return (s:gsub("^%s*(.-)%s*$", "%1"))
+end
+
+function cleanWhitespaces(str) 
+    return trim(str:gsub("%s+", " "))
 end
 
 -- convert German localized amount string to number object
@@ -115,25 +139,43 @@ end
 
 -- function to parse transaction details from CSV fields
 local function parseTransaction(transactionText, transaction)
-    local transactionCodePattern = "((%a%a)/%d%d%d%d%d%d%d%d%d)"
+    local transactionCodePattern = "((%u%u)/%d%d%d%d%d%d%d%d%d)"
+    -- local ibanPattern = "%u%u%d%d%w%w%w%w%w%w%w%w%w%w%w%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?%w?"
+
     local i, j, transactionCode, shortCode = transactionText:find(transactionCodePattern)
+
+    -- local function hasIBAN()
+    --     return transactionText:sub(j+2):match(ibanPattern) ~= nil
+    -- end
 
     -- helper function to extract BIC & IBAN from transactions that contain it
     local function extractBICIBAN(onlyIBAN)
-        local pattern = "^(%w+)"
+        -- if hasIBAN() then
+        local pattern = "^([%wäüö]+)"
         local title = transactionText:sub(j+2)
         local m, n, match = title:find(pattern)
-        if onlyIBAN then
-            transaction.accountNumber = match
+        
+        if m ~= nil then
+            if onlyIBAN then
+                transaction.accountNumber = match
+            else
+                transaction.bankCode = match
+                m, n, match = title:find(pattern, n+2)
+                transaction.accountNumber = match
+            end
+
+            if n ~= nil then
+                transaction.name = title:sub(n+2)
+            else
+                transaction.name = title
+            end
         else
-            transaction.bankCode = match
-            m, n, match = title:find(pattern, n+2)
-            transaction.accountNumber = match
+            transaction.name = title
         end
-        transaction.name = title:sub(n+2)
+        -- end
     end
 
-    -- BAWAG PSK uses two-letter codes to denote the type of transaction.
+    -- BAWAG PSK / easybank uses two-letter codes to denote the type of transaction.
     -- The format of the transaction details is very inconsistent among the transaction types.
     -- This lookup table is therefore used to extract the particular details from every transaction type.
     -- It can be extended, should new transaction codes appear in the future and uses a default for yet unknown types.
@@ -143,34 +185,43 @@ local function parseTransaction(transactionText, transaction)
             local m, n = transactionText:find(timePattern)
 
             transaction.bookingText = "Kartenzahlung"
-            transaction.name = transactionText:sub(n+2)
-            transaction.purpose = transactionText:sub(j+2, n)
+
+            if m ~= nil then
+                transaction.name = transactionText:sub(n+2)
+                transaction.purpose = transactionText:sub(j+2, n)
+            else
+                transaction.name = transactionText:sub(1, i-1)
+                transaction.purpose = transactionText:sub(j+2)
+            end
         end;
         BG = function()
             transaction.bookingText = "Konto"
-            if i == 1 then
-                transaction.name = trim(transactionText:sub(j+2))
-            else
-                transaction.name = trim(transactionText:sub(1, i-1))
-            end
+            -- if i == 1 then
+            --     transaction.name = transactionText:sub(j+2)
+            -- else
+            --     transaction.name = transactionText:sub(1, i-1)
+            -- end
+            transaction.purpose = transactionText:sub(1, i-1)
+            extractBICIBAN(false)
         end;
         FE = function()
             transaction.bookingText = "Überweisung"
+            transaction.purpose = transactionText:sub(1, i-1)
             extractBICIBAN(true)
         end;
         OG = function()
             transaction.bookingText = "Lastschrift"
-            transaction.purpose = trim(transactionText:sub(1, i-1))
+            transaction.purpose = transactionText:sub(1, i-1)
             extractBICIBAN(false)
         end;
         VD = function()
-            transaction.bookingText = "Eingehende Überweisung"
-            transaction.purpose= trim(transactionText:sub(1, i-1))
+            transaction.bookingText = "Überweisung"
+            transaction.purpose = transactionText:sub(1, i-1)
             extractBICIBAN(false)
         end;
         VB = function()
             transaction.bookingText = "Überweisung SEPA"
-            transaction.purpose= trim(transactionText:sub(1, i-1))
+            transaction.purpose = transactionText:sub(1, i-1)
             extractBICIBAN(false)
         end
     }
@@ -181,12 +232,23 @@ local function parseTransaction(transactionText, transaction)
             return function ()
                 transaction.bookingText = "Unbekannt: " .. k
                 transaction.name= transactionText
+                transaction.purpose = transactionText:sub(1, i-1)
             end
         end
     }
     setmetatable(codeTable, mt)
 
     codeTable[shortCode]()
+
+    -- clean multi-spaces from fields
+    if transaction.purpose ~= nil then
+        transaction.purpose = cleanWhitespaces(transaction.purpose)
+    end
+
+    if transaction.name ~= nil then
+        transaction.name = cleanWhitespaces(transaction.name)
+    end
+
     return transaction
 end
 
@@ -200,13 +262,13 @@ local overviewPage
 
 
 function SupportsBank (protocol, bankCode)
-    return protocol == ProtocolWebBanking and bankCode == "Bawag PSK"
+    return protocol == ProtocolWebBanking and (bankCode == "easybank" or bankCode == "Bawag PSK")
 end
 
 function InitializeSession (protocol, bankCode, username, username2, password, username3)
     connection = Connection()
 
-    local loginPage = HTML(connection:get(url))
+    local loginPage = HTML(bankCode == "Bawag PSK" and connection:get(urlBawag) or connection:get(urlEasybank))
 
     loginPage:xpath("//input[@name='dn']"):attr("value", username)
     loginPage:xpath("//input[@name='pin']"):attr("value", password)
@@ -217,7 +279,7 @@ function InitializeSession (protocol, bankCode, username, username2, password, u
     local erorrMessage = loginResponsePage:xpath("//*[@id='error_part_text']"):text()
     if string.len(erorrMessage) > 0 then
         MM.printStatus("Login failed. Reason: " .. erorrMessage)
-        return "Error received from BAWAG eBanking: " .. erorrMessage
+        return "Error received from eBanking: " .. erorrMessage
     end
 
     overviewPage = loginResponsePage
@@ -226,33 +288,80 @@ function InitializeSession (protocol, bankCode, username, username2, password, u
 end
 
 function ListAccounts (knownAccounts)
+    ignoreSince = true
+    local accounts = {}
+
+    -- navigate to account details
     local navigationForm = overviewPage:xpath("//form[@name='navigationform']")
     navigationForm:xpath("//input[@name='d']"):attr("value", "accountdetails")
     local accountDetailsPage = HTML(connection:request(navigationForm:submit()))
 
-    local accountName = accountDetailsPage:xpath("//label[text()='Produktbezeichnung']/following::label[1]"):text()
-    local accountIBAN = accountDetailsPage:xpath("//label[text()='IBAN']/following::label[1]"):text()
-    local accountBIC = accountDetailsPage:xpath("//label[text()='BIC']/following::label[1]"):text()
-    local accountOwner = accountDetailsPage:xpath("//label[text()='Name']/following::label[1]"):text()
+    -- iterate through accounts
+    local accountElements = accountDetailsPage:xpath("//select[@name='account_number']/option")
+    accountElements:each(function (index, element)
 
-    local account = {
-        name = accountName,
-        accountNumber = accountIBAN,
-        bic = accountBIC,
-        owner = accountOwner,
-        iban = accountIBAN,
-        currency = "EUR",
-        type = AccountTypeGiro
-    }
-    return {account}
+        -- select account
+        local accountDetailsForm = accountDetailsPage:xpath("//form[@name='account_details_form']")
+        local selectedAccount = accountDetailsForm:xpath("//select[@name='account_number']"):text()
+        accountDetailsForm:xpath("//select[@name='account_number']"):select(index - 1)
+        accountDetailsPage = HTML(connection:request(accountDetailsForm:submit()))
+
+        -- create account object
+        local accountName = accountDetailsPage:xpath("//*[@id='accountDetails']//label[text()='Produktbezeichnung']/../following::div[1]"):text()
+        local accountIBAN = accountDetailsPage:xpath("//*[@id='accountDetails']//label[text()='IBAN']/../following::div[1]"):text()
+        local accountBIC = accountDetailsPage:xpath("//*[@id='accountDetails']//label[text()='BIC']/../following::div[1]"):text()
+        local accountOwner = string.sub(selectedAccount, findLast(selectedAccount, "-") + 2)
+
+        local accountType = AccountTypeOther
+
+        if accountName == "easy gratis" then
+            accountType = AccountTypeGiro
+        elseif accountName == "easy zinsmax" or accountName == "easy premium" then
+            accountType = AccountTypeSavings
+        elseif accountName == "easy kreditkarte MasterCard" then
+            accountType = AccountTypeCreditCard
+        end
+
+        local account = {
+            name = accountName,
+            accountNumber = accountIBAN,
+            bic = accountBIC,
+            owner = accountOwner,
+            iban = accountIBAN,
+            currency = "EUR",
+            type = accountType
+        }
+    
+        if debug then
+            print("Fetched account:")
+            print("  Name:", account.name)
+            print("  Number:", account.accountNumber)
+            print("  BIC:", account.bic)
+            print("  IBAN:", account.iban)
+            print("  Currency:", account.currency)
+            print("  Type:", account.type)
+        end
+
+        table.insert(accounts, account)
+    end)
+
+    return accounts
 end
 
 function RefreshAccount (account, since)
+    -- navigate to transactions
     local navigationForm = overviewPage:xpath("//form[@name='navigationform']")
     navigationForm:xpath("//input[@name='d']"):attr("value", "transactions")
     local transactionsPage = HTML(connection:request(navigationForm:submit()))
 
-    local balance = transactionsPage:xpath("//span[@class='konto-stand-sum']/span[1]"):text()
+    -- select account
+    local transactionSearchForm = transactionsPage:xpath("//form[@name='transactionSearchForm']")
+    local selectedAccount = transactionSearchForm:xpath("//select[@name='konto']/option[contains(text(), '" .. account.iban .. "')]"):attr("value")
+    transactionSearchForm:xpath("//input[@name='accountChange']"):attr("value", "true")
+    transactionSearchForm:xpath("//select[@name='konto']"):select(selectedAccount)
+    transactionsPage = HTML(connection:request(transactionSearchForm:submit()))
+
+    local balance = transactionsPage:xpath("//form[@name='transactionSearchForm']//div[text()='Kontostand']/../div[2]/span[1]"):text()
     balance = strToAmount(balance)
 
     -- initiate download of CSV file of all transactions
@@ -269,15 +378,29 @@ function RefreshAccount (account, since)
     parseCSV(transactionsCSV, function (fields)
         if #fields < 6 then
             return
-        elseif strToDate(fields[4]) ~= nil and strToDate(fields[4]) >= since then
+        elseif strToDate(fields[4]) ~= nil and (strToDate(fields[4]) >= since or ignoreSince) then
             local transaction = {
                 bookingDate = strToDate(fields[4]),
                 valueDate   = strToDate(fields[3]),
                 amount      = strToAmount(fields[5]),
-                currency    = "EUR",
+                currency    = fields[6],
                 booked      = true,
             }
             transaction = parseTransaction(fields[2], transaction)
+
+            if debug then
+                print("Transaction:")
+                print("  Booking Date:", transaction.bookingDate)
+                print("  Value Date:", transaction.valueDate)
+                print("  Amount:", transaction.amount)
+                print("  Currency:", transaction.currency)
+                print("  Booking Text:", transaction.bookingText)
+                print("  Purpose:", (transaction.purpose and transaction.purpose or "-"))
+                print("  Name:", (transaction.name and transaction.name or "-"))
+                print("  Bank Code:", (transaction.bankCode and transaction.bankCode or "-"))
+                print("  Account Number:", (transaction.accountNumber and transaction.accountNumber or "-"))
+            end
+
             table.insert(transactions, transaction)
         end
     end)
