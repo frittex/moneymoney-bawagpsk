@@ -23,7 +23,7 @@
 -- THE SOFTWARE.
 
 WebBanking{
-    version = 1.00,
+    version = 2.00,
     url         = "https://ebanking.bawagpsk.com/InternetBanking/InternetBanking?d=login",
     services    = {"Bawag PSK"},
     description = "Bawag PSK Web-Scraping"
@@ -152,10 +152,11 @@ local function parseTransaction(transactionText, transaction)
                 transaction.name = trim(transactionText:sub(j+2))
             else
                 transaction.name = trim(transactionText:sub(1, i-1))
+                transaction.purpose = trim(transactionText:sub(j+2))
             end
         end;
         FE = function()
-            transaction.bookingText = "Überweisung"
+            transaction.bookingText = "Inlandstransaktion"
             extractBICIBAN(true)
         end;
         OG = function()
@@ -197,32 +198,72 @@ end
 -- global variables to re-use a single connection and cache the entry page of the web banking portal
 local connection
 local overviewPage
+local twoFactorPage
 
 
 function SupportsBank (protocol, bankCode)
     return protocol == ProtocolWebBanking and bankCode == "Bawag PSK"
 end
 
-function InitializeSession (protocol, bankCode, username, username2, password, username3)
-    connection = Connection()
+-- main function for dealing with two-factor-auth and getting transaction history
+function InitializeSession2 (protocol, bankCode, step, credentials, interactive)
+    if step == 1 then
+        MM.printStatus("Step 1")
+        if interactive == false then
+            return "2FA only works interactively, because the login will be locked by the bank after a couple of unsuccesful attempts"
+        end
+        local username = credentials[1]
+        local password = credentials[2]
 
-    local loginPage = HTML(connection:get(url))
+        connection = Connection()
 
-    loginPage:xpath("//input[@name='dn']"):attr("value", username)
-    loginPage:xpath("//input[@name='pin']"):attr("value", password)
+        local loginPage = HTML(connection:get(url))
 
-    local loginForm = loginPage:xpath("//form[@name='loginForm']")
-    local loginResponsePage = HTML(connection:request(loginForm:submit()))
+        loginPage:xpath("//input[@name='dn']"):attr("value", username)
+        loginPage:xpath("//input[@name='pin']"):attr("value", password)
 
-    local erorrMessage = loginResponsePage:xpath("//*[@id='error_part_text']"):text()
-    if string.len(erorrMessage) > 0 then
-        MM.printStatus("Login failed. Reason: " .. erorrMessage)
-        return "Error received from BAWAG eBanking: " .. erorrMessage
+        local loginForm = loginPage:xpath("//form[@name='loginForm']")
+        local loginResponsePage = HTML(connection:request(loginForm:submit()))
+
+        local erorrMessage = loginResponsePage:xpath("//*[@id='error_part_text']"):text()
+        if string.len(erorrMessage) > 0 then
+            MM.printStatus("Login failed. Reason: " .. erorrMessage)
+            return "Error received from BAWAG eBanking: " .. erorrMessage
+        end
+
+        local scaLoginForm = loginResponsePage:xpath("//form[@name='scaLoginForm']")
+        if scaLoginForm:length() ~= 0 then
+            MM.printStatus("Two-Factor Authentication needed")
+            scaLoginForm:xpath("//input[@value='mtan_anfordern']"):attr("checked", "true")
+            twoFactorPage = HTML(connection:request(scaLoginForm:submit()))
+            local challenge = twoFactorPage:xpath("//p[@class='itan-calculator-tip']"):text()
+            local twoFactorAuth = {
+                title = "mobileTAN",
+                challenge = challenge,
+                label = "Enter your mobileTAN"
+            }
+            return twoFactorAuth
+        end
+
+        overviewPage = loginResponsePage
+
+        MM.printStatus("Login successful");
     end
 
-    overviewPage = loginResponsePage
+    if step == 2 then
+        MM.printStatus("Step 2")
+        local tan = credentials[1]
+        twoFactorPage:xpath("//*[@id='tan']"):attr("value", tan)
+        local scaLoginForm = twoFactorPage:xpath("//form[@name='scaLoginForm']")
+        MM.printStatus("Sending TAN")
+        overviewPage = HTML(connection:request(scaLoginForm:submit()))
+        local transferForm = overviewPage:xpath("//form[@name='transferform']")
+        if transferForm:length() ~= 0 then
+            HTML(connection:request(transferForm:submit()))
+            return "weird form"
+        end
+    end
 
-    MM.printStatus("Login successful");
 end
 
 function ListAccounts (knownAccounts)
